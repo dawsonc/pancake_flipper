@@ -10,15 +10,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # PyDrake imports
-import pydrake
 from pydrake.all import (
     AddMultibodyPlantSceneGraph, DiagramBuilder, Parser,
-    PlanarSceneGraphVisualizer, Simulator, VectorSystem,
+    MathematicalProgram, eq, ge,
     JacobianWrtVariable
 )
-
-from utils import ManipulatorDynamics
-
 
 # Record the *half* extents of the flipper and pancake geometry
 FLIPPER_H = 0.1
@@ -164,48 +160,6 @@ def collision_guards(pancake_flipper, q):
     return np.array([phi_a, phi_b, phi_c, phi_d])
 
 
-def reset_velocity_on_corner_impact(vars, pancake_flipper, corner_idx):
-    '''Returns a vector that must vanish in order to enforce an impulsive
-    collision between the specified corner and the flipper. Based on the
-    code provided in compass_gait_limit_cycle.ipynb (Assignment 5).
-
-    @param vars: the concatenation of
-                    - pancake flipper configuration
-                    - configuration velocities before and after the impact
-                    - the impulse (in x and z) delivered to the pancake by
-                      the flipper, transmitted through the corner
-    @param pancake_flipper: a MultibodyPlant representing the pancake flipper
-    @param corner_idx: an integer index into the corners of the pancake,
-                       arranged as [lower left, lower right, upper right,
-                       upper left]
-    @returns: a vector whose components must go to zero in order for the
-              collision to be inelastic and the velocity jump to be consistent
-              with the impulse delivered.
-    '''
-    # Extract the subvariables from the input vector
-    assert vars.size == 20   # 3*6 states + 2 impulses
-    q = vars[:6]             # configuration
-    qdot_pre = vars[6:12]    # configuration velocity before impact
-    qdot_post = vars[12:18]  # configuration velocity after impact
-    impulse = vars[18:]      # (x, z) impulse delivered to pancake
-
-    # Set the configuration
-    context = pancake_flipper.CreateDefaultContext()
-    pancake_flipper.SetPositions(context, q)
-
-    # Get the mass matrix and Jacobian for this corner
-    M = pancake_flipper.CalcMassMatrixViaInverseDynamics(context)
-    J = get_pancake_corner_jacobian(pancake_flipper, context, corner_idx)
-
-    # This vector must vanish in order for the impact to be valid
-    arrest_x_motion = 0  # set to 1 to zero the x velocity on impact
-    arrest_motion = np.array([[arrest_x_motion, 0], [0, 1]])  # masks x
-    return np.concatenate((
-        M.dot(qdot_post - qdot_pre) - J.T.dot(impulse),  # momentum conserved
-        arrest_motion.dot(J.dot(qdot_pre))               # stick the landing
-    ))
-
-
 def get_pancake_corner_jacobian(pancake_flipper, context, corner_idx):
     '''Returns the Jacobian of the specified corner of the pancake in the
     flipper frame.
@@ -284,51 +238,87 @@ builder = DiagramBuilder()
 # Create the plant and scene graph
 pancake_flipper, scene_graph = build_pancake_flipper_plant(builder)
 
-# Instantiate the controller
-controller = builder.AddSystem(DropController(pancake_flipper))
+# Create the optimization problem (based on UR HW 5)
 
-# Connect the state output from the plant to the controller
-builder.Connect(pancake_flipper.get_state_output_port(),
-                controller.get_input_port(0))
+# The number of time steps in the trajectory optimization
+T = 50
 
-# Close the loop by connecting the output of the controller to the plant
-builder.Connect(controller.get_output_port(0),
-                pancake_flipper.get_actuation_input_port())
+# The minimum and maximum time interval is seconds
+h_min = .005
+h_max = .05
 
-# Add a visualizer so we can see what's going on
-visualizer = builder.AddSystem(
-    PlanarSceneGraphVisualizer(scene_graph, xlim=[-4., 4.], ylim=[-4., 4.]))
+# Initialize the optimization program
+prog = MathematicalProgram()
 
-# Connect the output of the scene graph to the visualizer
-builder.Connect(scene_graph.get_pose_bundle_output_port(),
-                visualizer.get_input_port(0))
+# Define the vector of the time intervals as a decision variable
+# (distances between the T + 1 break points)
+h = prog.NewContinuousVariables(T, name='h')
 
-# Build the diagram!
-diagram = builder.Build()
+nq = 6  # number of states
+# Define decision variables for the system configuration, generalized
+# velocities, and accelerations
+q = prog.NewContinuousVariables(rows=T + 1, cols=nq, name='q')
+qdot = prog.NewContinuousVariables(rows=T + 1, cols=nq, name='qdot')
+qddot = prog.NewContinuousVariables(rows=T, cols=nq, name='qddot')
 
-# start recording the video for the animation of the simulation
-visualizer.start_recording()
+# Also define decision variables for the contact forces (x and z in flipper
+# frame) at each corner of the pancake at each timestep
+n_forces = 2  # x and z
+f_ll = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ll')
+f_lr = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_lr')
+f_ur = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ur')
+f_ul = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ul')
 
-# set up a simulator
-simulator = Simulator(diagram)
-simulator.set_publish_every_time_step(False)
+# Now we get to the fun part: defining our constraints!
 
-# We should be fine with the default initial conditions, so don't change them
-context = simulator.get_mutable_context()
-context.SetTime(0.0)  # reset current time
-context.SetContinuousState((
-    0, 0.2,
-    0, 0.5,
-    0, 0.4,
-    0, 0,
-    0, 0,
-    0, 0
-))
+# Add a bounding box on the length of individual timesteps
+prog.AddBoundingBoxConstraint([h_min] * T, [h_max] * T, h)
 
-# simulate from zero to sim_time
-simulator.Initialize()
-sim_time = 5
-simulator.AdvanceTo(sim_time)
+# Using the implicit Euler method, constrain the configuration,
+# velocity, and accelerations to be self-consistent.
+# Note: we're not worried about satisfying the dynamics here, just
+# making sure that the velocity is the rate of change of configuration,
+# and likewise for acceleration and velocity
+for t in range(T):
+    prog.AddConstraint(eq(q[t + 1], q[t] + h[t] * qdot[t + 1]))
+    prog.AddConstraint(eq(qdot[t + 1], qdot[t] + h[t] * qddot[t + 1]))
 
-# stop the video and build the animation
-visualizer.stop_recording()
+# Now we add the constraint enforcing the manipulator dynamics at all timesteps
+for t in range(T):
+    # Assemble the relevant variables:
+    #   - configuration
+    #   - velocity
+    #   - acceleration
+    #   - contact forces (ll, lr, ur, ul)
+    vars = np.concatenate((q[t + 1], qdot[t + 1], qddot[t],
+                           f_ll[t], f_lr[t], f_ur[t], f_ul[t]))
+    prog.AddConstraint(manipulator_equations,
+                       lb=[0] * nq,
+                       ub=[0] * nq,
+                       vars=vars)
+
+# Now we have the (only somewhat onerous) task of constraining the contact
+# forces at all timesteps. More specifically, we need to constrain:
+#   1.) The contact guards are nonnegative
+#   2.) Contact forces in the z direction are nonnegative
+#   3.) Contact forces in the x direction are within the friction cone
+#   4.) Contact forces in z are complementary with the contact guards
+#   5.) Sliding only occurs when contact forces are at the limit of the
+#       friction cone (i.e. the friction cone constraint and tangential
+#       velocity of the contact point are complementary)
+
+# TODO: Add decision variables for fx+ and fx- for each corner
+# TODO: Add linear inequality enforcing the friction cone constraint
+# TODO: write function to enforce the nonlinear complementarity constraints
+
+# TODO: Add initial guess for timesteps
+# TODO: Add initial guess for trajectory (how to make a feasible one?)
+#           Maybe just up, flip, down?
+# TODO: Add initial guess for forces (0?)
+
+# TODO: Solve?
+# TODO: Hope it works?
+# TODO: Delete previous question marks!
+
+# TODO: Extract optimal solution
+# TODO: Animate

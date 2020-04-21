@@ -1,5 +1,5 @@
 [x] 1.) Do Pset 5
-[ ] 2.) Restructure code
+[x] 2.) Restructure code
 [ ] 3.) make dircol optimization
 [ ] 4.) hope dircol works
 [ ] 5.) stabilize?
