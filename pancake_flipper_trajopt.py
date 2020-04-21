@@ -82,6 +82,9 @@ def collision_guards(q):
     phi_c = n_f_sign * n_f.transpose().dot(x_c - x_f) - FLIPPER_H
     phi_d = n_f_sign * n_f.transpose().dot(x_d - x_f) - FLIPPER_H
 
+    # Return the signed distances
+    return np.array([phi_a, phi_b, phi_c, phi_d])
+
 
 class DropController(VectorSystem):
 
