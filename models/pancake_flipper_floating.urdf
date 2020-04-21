@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+
+<robot name="pancake_flipper">
+
+  <link name="flipper">
+
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1" />
+      <inertia ixx="1"  ixy="0"  ixz="0" iyy="1" iyz="0" izz="1" />
+    </inertial>
+
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="1.5 0.2 0.2" />
+      </geometry>
+      <material>
+        <color rgba="0 0 1 1" />
+      </material>
+    </visual>
+
+  </link>
+
+  <link name="pancake">
+
+    <inertial>
+      <origin xyz="0 0 0.15" />
+      <mass value="0.5" />
+      <inertia ixx="0.5"  ixy="0"  ixz="0" iyy="0.5" iyz="0" izz="0.5" />
+    </inertial>
+
+    <visual>
+      <origin xyz="0 0 0.15" />
+      <geometry>
+         <box size="0.5 0.1 0.1" />
+      </geometry>
+      <material>
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+
+  </link>
+
+  <joint name="flipper_pose" type="floating">
+    <parent link="world"/>
+    <child link="flipper"/>
+  </joint>
+
+  <joint name="pancake_pose" type="floating">
+    <parent link="world"/>
+    <child link="pancake"/>
+  </joint>
+
+  <transmission type="SimpleTransmission" name="flipper_force">
+    <actuator name="flipper_force"/>
+    <joint name="flipper_pose" />
+  </transmission>
+
+</robot>
