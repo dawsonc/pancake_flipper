@@ -14,7 +14,7 @@ import pydrake
 from pydrake.all import (
     AddMultibodyPlantSceneGraph, DiagramBuilder, Parser,
     PlanarSceneGraphVisualizer, Simulator, VectorSystem,
-    Multiplexer, MatrixGain, LogOutput, plot_system_graphviz
+    JacobianWrtVariable
 )
 
 from utils import ManipulatorDynamics
@@ -27,187 +27,227 @@ PANCAKE_H = 0.05
 PANCAKE_W = 0.25
 
 
-def collision_guards(q):
-    '''Given the state of the flipper and pancake, returns a vector of
-    signed distances from each corner of the pancake to the top surface
-    of the flipper.
+def get_pancake_corners():
+    '''Returns a list of the (x, y, z) coordinates of the four corners
+    of the pancake, expressed in the pancake frame
 
-    @input q: 1x6 np.array [x_f, x_p, y_f, y_p, theta_f, theta_p]
-    @output phi: 1x4 np.array of signed distances from the top surface
-                 of the flipper to the bottom left, bottom right, top
-                 right, and top left corners of the pancake. Positive
-                 when no contact, zero at contact.
+    @returns: a list of 4 1x3 np.arrays, containing the lower left, lower
+              right, upper right, and upper left corner coordinates.
     '''
-    # Extract state for flipper and pancake as well
-    q_f = np.array([q[0], q[2], q[4]])
-    q_p = np.array([q[1], q[3], q[5]])
-
-    # For convenience, extract state further
-    x_f = q_f[:2]                   # 2D location of flipper
-    x_p = q_p[:2]                   # 2D location of pancake
-    theta_f = q_f[2]                # Angle of flipper
-    theta_p = q_p[2]                # Angle of pancake
-    c_theta_f = np.cos(theta_f)     # Trig functions, for convenience
-    s_theta_f = np.sin(theta_f)
-    c_theta_p = np.cos(theta_p)
-    s_theta_p = np.sin(theta_p)
-
-    # Now get the unit vectors normal to the pancake and flipper
-    # and the unit normal tangent to the flipper
-    n_f = np.array([s_theta_f, c_theta_f])  # normal to flipper
-    n_p = np.array([s_theta_p, c_theta_p])  # normal to pancake
-    t_p = np.array([c_theta_p, -s_theta_p])  # tangent to pancake
-
-    # We need to make sure the flipper normal is pointing towards the
-    # pancake, so keep track of whether we need to flip the sign.
-    n_f_sign = 1
-    if n_f.dot(x_p - x_f) < 0:
-        n_f_sign = -1
-
-    # Now calculate the positions of all four corners of the pancake
+    # Calculate the positions of all four corners of the pancake in the
+    # pancake frame
     #
     #       d---------c
     #       |         |
     #       |         |
     #       a---------b
-    x_a = x_p - PANCAKE_H * n_p - PANCAKE_W * t_p
-    x_b = x_p - PANCAKE_H * n_p + PANCAKE_W * t_p
-    x_c = x_p + PANCAKE_H * n_p + PANCAKE_W * t_p
-    x_d = x_p + PANCAKE_H * n_p - PANCAKE_W * t_p
+    x_a = np.array([-PANCAKE_W, 0, -PANCAKE_H])
+    x_b = np.array([PANCAKE_W, 0, -PANCAKE_H])
+    x_c = np.array([PANCAKE_W, 0, PANCAKE_H])
+    x_d = np.array([-PANCAKE_W, 0, PANCAKE_H])
 
-    # Now calculate the guards (signed distance from each corner of the
-    # pancake to the flipper)
-    phi_a = n_f_sign * n_f.transpose().dot(x_a - x_f) - FLIPPER_H
-    phi_b = n_f_sign * n_f.transpose().dot(x_b - x_f) - FLIPPER_H
-    phi_c = n_f_sign * n_f.transpose().dot(x_c - x_f) - FLIPPER_H
-    phi_d = n_f_sign * n_f.transpose().dot(x_d - x_f) - FLIPPER_H
+    return [x_a, x_b, x_c, x_d]
+
+
+def manipulator_equations(vars, pancake_flipper):
+    '''Returns a vector that must vanish in order to enforce dynamics
+    consistent with the manipulator equations for the pancake flipper.
+    Based on the code provided in compass_gait_limit_cycle.ipynb (Assignment 5)
+
+    @param vars: the concatenation of
+                    - pancake flipper configuration
+                    - configuration velocity
+                    - configuration acceleration
+                    - contact forces (x and z) at each corner of the pancake,
+                      arranged as [lower left, lower right, upper right,
+                      upper left]
+    @param pancake_flipper: a MultibodyPlant representing the pancake flipper
+    @returns: a vector whose components must go to zero in order for the
+              dynamics to be consistent with the manipulator equations
+    '''
+    # Split vars into subvariables
+    n_states = 6
+    n_corners = 4
+    n_forces = 2
+    assert vars.size == 3 * n_states + n_corners * n_forces
+    split_at_indices = [n_states, 2 * n_states, 3 * n_states]
+    q, qdot, qddot, f = np.split(vars, split_at_indices)
+    split_at_indices = [n_forces, 2 * n_forces, 3 * n_forces]
+    f_ll, f_lr, f_ur, f_ul = np.split(f, split_at_indices)
+
+    # Set plant state
+    context = pancake_flipper.CreateDefaultContext()
+    pancake_flipper.SetPositions(context, q)
+    pancake_flipper.SetVelocities(context, qdot)
+
+    # Calculate the manipulator equation matrices
+    M = pancake_flipper.CalcMassMatrixViaInverseDynamics(context)
+    Cv = pancake_flipper.CalcBiasTerm(context)
+    tauG = pancake_flipper.CalcGravityGeneralizedForces(context)
+
+    # Calculate the contact Jacobian for each corner
+    J_ll = get_pancake_corner_jacobian(pancake_flipper, context, 0)
+    J_lr = get_pancake_corner_jacobian(pancake_flipper, context, 1)
+    J_ur = get_pancake_corner_jacobian(pancake_flipper, context, 2)
+    J_ul = get_pancake_corner_jacobian(pancake_flipper, context, 3)
+
+    # Return the violation of the manipulator equation
+    return M.dot(qddot) + Cv - tauG - J_ll.T.dot(f_ll) \
+                                    - J_lr.T.dot(f_lr) \
+                                    - J_ur.T.dot(f_ur) \
+                                    - J_ul.T.dot(f_ul)
+
+
+def collision_guards(pancake_flipper, q):
+    '''Given the state of the flipper and pancake, returns a vector of
+    signed distances from each corner of the pancake to the top surface
+    of the flipper.
+
+    @param pancake_flipper: a MultibodyPlant representing the pancake flipper
+    @param q: 1x6 np.array [x_f, x_p, y_f, y_p, theta_f, theta_p]
+    @returns phi: 1x4 np.array of signed distances from the top surface
+                 of the flipper to the bottom left, bottom right, top
+                 right, and top left corners of the pancake. Positive
+                 when no contact, zero at contact.
+    '''
+    # Get the frames for the flipper and pancake
+    pancake_frame = pancake_flipper.GetBodyByName("pancake").body_frame()
+    flipper_frame = pancake_flipper.GetBodyByName("flipper").body_frame()
+
+    # Now get the positions of all four corners of the pancake in the
+    # pancake frame
+    #
+    #       d---------c
+    #       |         |
+    #       |         |
+    #       a---------b
+    x_a, x_b, x_c, x_d = get_pancake_corners()
+
+    # Transform each corner point into the flipper frame
+    context = pancake_flipper.CreateDefaultContext()
+    pancake_flipper.SetPositions(context, q)
+    x_a_flipper_frame = pancake_flipper.CalcPointsPosition(
+        context,
+        pancake_frame,
+        x_a,
+        flipper_frame
+    )
+    x_b_flipper_frame = pancake_flipper.CalcPointsPosition(
+        context,
+        pancake_frame,
+        x_b,
+        flipper_frame
+    )
+    x_c_flipper_frame = pancake_flipper.CalcPointsPosition(
+        context,
+        pancake_frame,
+        x_c,
+        flipper_frame
+    )
+    x_d_flipper_frame = pancake_flipper.CalcPointsPosition(
+        context,
+        pancake_frame,
+        x_d,
+        flipper_frame
+    )
+
+    # We assume that the flipper is infinitely wide, so the signed
+    # distance from each corner to the flipper is simply its z coordinate
+    # in the flipper frame offset by the half height of the flipper
+    # TODO: relax this assumption
+    phi_a = x_a_flipper_frame[2] - np.sign(x_a_flipper_frame[2]) * FLIPPER_H
+    phi_b = x_b_flipper_frame[2] - np.sign(x_b_flipper_frame[2]) * FLIPPER_H
+    phi_c = x_c_flipper_frame[2] - np.sign(x_c_flipper_frame[2]) * FLIPPER_H
+    phi_d = x_d_flipper_frame[2] - np.sign(x_d_flipper_frame[2]) * FLIPPER_H
 
     # Return the signed distances
     return np.array([phi_a, phi_b, phi_c, phi_d])
 
 
-class DropController(VectorSystem):
+def reset_velocity_on_corner_impact(vars, pancake_flipper, corner_idx):
+    '''Returns a vector that must vanish in order to enforce an impulsive
+    collision between the specified corner and the flipper. Based on the
+    code provided in compass_gait_limit_cycle.ipynb (Assignment 5).
 
-    def __init__(self, pancake_flipper):
-        # 12 inputs: state of robot and pancake (x, y, and theta for each)
-        # 3 outputs: x_ddot, y_ddot, and theta_ddot for the robot
-        VectorSystem.__init__(self, 12, 3)
-        self.pancake_flipper = pancake_flipper
-        self.phi_b = 100
+    @param vars: the concatenation of
+                    - pancake flipper configuration
+                    - configuration velocities before and after the impact
+                    - the impulse (in x and z) delivered to the pancake by
+                      the flipper, transmitted through the corner
+    @param pancake_flipper: a MultibodyPlant representing the pancake flipper
+    @param corner_idx: an integer index into the corners of the pancake,
+                       arranged as [lower left, lower right, upper right,
+                       upper left]
+    @returns: a vector whose components must go to zero in order for the
+              collision to be inelastic and the velocity jump to be consistent
+              with the impulse delivered.
+    '''
+    # Extract the subvariables from the input vector
+    assert vars.size == 20   # 3*6 states + 2 impulses
+    q = vars[:6]             # configuration
+    qdot_pre = vars[6:12]    # configuration velocity before impact
+    qdot_post = vars[12:18]  # configuration velocity after impact
+    impulse = vars[18:]      # (x, z) impulse delivered to pancake
 
-        # Record the *half* extents of the flipper and pancake geometry
-        self.FLIPPER_H = 0.1
-        self.FLIPPER_W = 0.75
-        self.PANCAKE_H = 0.05
-        self.PANCAKE_W = 0.25
+    # Set the configuration
+    context = pancake_flipper.CreateDefaultContext()
+    pancake_flipper.SetPositions(context, q)
 
-    def DoCalcVectorOutput(
-            self,
-            context,
-            controller_input,  # state of robot flipper and pancake
-            controller_state,  # unused input (static controller)
-            controller_output):  # robot flipper acceleration
+    # Get the mass matrix and Jacobian for this corner
+    M = pancake_flipper.CalcMassMatrixViaInverseDynamics(context)
+    J = get_pancake_corner_jacobian(pancake_flipper, context, corner_idx)
 
-        # unpack state
-        q = controller_input[:6]
-        q_dot = controller_input[6:]  # time derivative of q
+    # This vector must vanish in order for the impact to be valid
+    arrest_x_motion = 0  # set to 1 to zero the x velocity on impact
+    arrest_motion = np.array([[arrest_x_motion, 0], [0, 1]])  # masks x
+    return np.concatenate((
+        M.dot(qdot_post - qdot_pre) - J.T.dot(impulse),  # momentum conserved
+        arrest_motion.dot(J.dot(qdot_pre))               # stick the landing
+    ))
 
-        # Also extract state for flipper and pancake as well
-        q_f = np.array([q[0], q[2], q[4]])
-        q_dot_f = np.array([q_dot[0], q_dot[2], q_dot[4]])
 
-        q_p = np.array([q[1], q[3], q[5]])
-        q_dot_p = np.array([q_dot[1], q_dot[3], q_dot[5]])
+def get_pancake_corner_jacobian(pancake_flipper, context, corner_idx):
+    '''Returns the Jacobian of the specified corner of the pancake in the
+    flipper frame.
 
-        # extract manipulator equations: M*a + Cv = tauG + B*u + tauExt
-        M, Cv, tauG, B, tauExt = ManipulatorDynamics(self.pancake_flipper,
-                                                     q, q_dot)
+    @param pancake_flipper: a MultibodyPlant representing the pancake flipper
+    @param context: the drake context specifying the state of the plant
+    @param corner_idx: an integer index into the corners of the pancake,
+                       arranged as [lower left, lower right, upper right,
+                       upper left]
+    @returns: the Jacobian of the translational position of the specified
+              corner of the pancake in the flipper frame, as a 2x6 matrix
+              where the first row represents the gradient of the x position
+              w.r.t. the state, and the second row represents the gradient of
+              the z position w.r.t. the state.
+    '''
+    # Get the frames for the flipper and pancake
+    pancake_frame = pancake_flipper.GetBodyByName("pancake").body_frame()
+    flipper_frame = pancake_flipper.GetBodyByName("flipper").body_frame()
 
-        # Consolidate gravitational and coriolis forces
-        tau = tauG - Cv
+    # Now get the positions of all four corners of the pancake in the
+    # pancake frame
+    #
+    #       d---------c
+    #       |         |
+    #       |         |
+    #       a---------b
+    corners_list = get_pancake_corners()
 
-        # Check the contact guard conditions (this requires some setup first)
-        x_f = q_f[:2]
-        x_p = q_p[:2]
-        theta_f = q_f[2]
-        theta_p = q_p[2]
-        c_theta_f = np.cos(theta_f)
-        s_theta_f = np.sin(theta_f)
-        c_theta_p = np.cos(theta_p)
-        s_theta_p = np.sin(theta_p)
+    # Select the one we want
+    corner = corners_list[corner_idx]
+    # Calculate the Jacobian using the plant
+    corner_jacobian = pancake_flipper.CalcJacobianTranslationVelocity(
+        context,
+        JacobianWrtVariable(0),
+        pancake_frame,
+        corner,
+        flipper_frame,
+        flipper_frame
+    )
 
-        # Now get the unit vectors normal to the pancake and flipper
-        # and the unit normal tangent to the flipper
-        n_f = np.array([s_theta_f, c_theta_f])  # normal to flipper
-        n_p = np.array([s_theta_p, c_theta_p])  # normal to pancake
-        t_p = np.array([c_theta_p, -s_theta_p])  # tangent to pancake
-
-        # We need to make sure the flipper normal is pointing towards the
-        # pancake
-        n_f_sign = 1
-        if n_f.dot(x_p - x_f) < 0:
-            n_f_sign = -1
-
-        # Now calculate the positions of all four corners of the pancake
-        #
-        #       d---------c
-        #       |         |
-        #       |         |
-        #       a---------b
-        x_a = x_p - self.PANCAKE_H * n_p - self.PANCAKE_W * t_p
-        x_b = x_p - self.PANCAKE_H * n_p + self.PANCAKE_W * t_p
-        x_c = x_p + self.PANCAKE_H * n_p + self.PANCAKE_W * t_p
-        x_d = x_p + self.PANCAKE_H * n_p - self.PANCAKE_W * t_p
-
-        # Now calculate the guards (signed distance from each corner of the
-        # pancake to the flipper)
-        phi_a = n_f_sign * n_f.transpose().dot(x_a - x_f) - self.FLIPPER_H
-        phi_b = n_f_sign * n_f.transpose().dot(x_b - x_f) - self.FLIPPER_H
-        phi_c = n_f_sign * n_f.transpose().dot(x_c - x_f) - self.FLIPPER_H
-        phi_d = n_f_sign * n_f.transpose().dot(x_d - x_f) - self.FLIPPER_H
-
-        # We would also like the Jacobian of each signed distance for use
-        # in the manipulator equations:
-        #
-        #       M q_ddot = tau + J_phi^T [lambda_a, lambda_b, ...]^T
-        #
-        # J_phi^T = [ \nabla phi_a ^T, \nabla phi_b ^T, ... ]
-        #
-        # \nabla phi_i = (x_i-x_f)^T(\nabla n_f) + n_f^T(\nabla x_i-\nabla x_f)
-        # (\nabla = gradient)
-        nabla_n_f = np.array([[0, 0, c_theta_f, 0, 0, 0],
-                              [0, 0, -s_theta_f, 0, 0, 0]])
-        nabla_x_f = np.array([[1, 0, 0, 0, 0, 0],
-                              [0, 1, 0, 0, 0, 0]])
-
-        h, w = (self.PANCAKE_H, self.PANCAKE_W)
-        nabla_x_a = np.array([[0, 0, 0, 1, 0, -h * c_theta_p + w * s_theta_p],
-                              [0, 0, 0, 0, 1, h * s_theta_p + w * c_theta_p]])
-        nabla_x_b = np.array([[0, 0, 0, 1, 0, -h * c_theta_p - w * s_theta_p],
-                              [0, 0, 0, 0, 1, h * s_theta_p - w * c_theta_p]])
-        nabla_x_c = np.array([[0, 0, 0, 1, 0, h * c_theta_p - w * s_theta_p],
-                              [0, 0, 0, 0, 1, -h * s_theta_p - w * c_theta_p]])
-        nabla_x_d = np.array([[0, 0, 0, 1, 0, h * c_theta_p + w * s_theta_p],
-                              [0, 0, 0, 0, 1, -h * s_theta_p + w * c_theta_p]])
-
-        nabla_phi_a = (x_a - x_f).transpose().dot(nabla_n_f) \
-            + n_f.transpose().dot(nabla_x_a - nabla_x_f)
-        nabla_phi_b = (x_b - x_f).transpose().dot(nabla_n_f) \
-            + n_f.transpose().dot(nabla_x_b - nabla_x_f)
-        nabla_phi_c = (x_c - x_f).transpose().dot(nabla_n_f) \
-            + n_f.transpose().dot(nabla_x_c - nabla_x_f)
-        nabla_phi_d = (x_d - x_f).transpose().dot(nabla_n_f) \
-            + n_f.transpose().dot(nabla_x_d - nabla_x_f)
-
-        J_phi_T = np.hstack((nabla_phi_a.transpose(),
-                             nabla_phi_b.transpose(),
-                             nabla_phi_c.transpose(),
-                             nabla_phi_d.transpose()))
-
-        # control signal
-        # Dummy controller just counteracts gravity and coriolis
-        controller_output[:3] = -100*q_f - np.array([tau[0], tau[2], tau[4]])
-        # controller_output[2] = 0
+    # Discard the y component since we're in 2D
+    corner_jacobian = corner_jacobian[[0, 2]]
 
 
 def build_pancake_flipper_plant(builder):

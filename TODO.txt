@@ -3,3 +3,6 @@
 [ ] 3.) make dircol optimization
 [ ] 4.) hope dircol works
 [ ] 5.) stabilize?
+
+Unresolved:
+- Relax infinite flipper assumption
