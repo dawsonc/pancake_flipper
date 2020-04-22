@@ -12,8 +12,12 @@ import matplotlib.pyplot as plt
 # PyDrake imports
 from pydrake.all import (
     AddMultibodyPlantSceneGraph, DiagramBuilder, Parser,
-    MathematicalProgram, eq, ge,
-    JacobianWrtVariable
+    MathematicalProgram, SnoptSolver, SolverOptions, eq, ge,
+    JacobianWrtVariable,
+    PiecewisePolynomial,
+    TrajectorySource, MultibodyPositionToGeometryPose,
+    PlanarSceneGraphVisualizer, Simulator,
+    MultibodyPlant, SceneGraph
 )
 
 # Record the *half* extents of the flipper and pancake geometry
@@ -23,7 +27,7 @@ PANCAKE_H = 0.05
 PANCAKE_W = 0.25
 
 # Friction coefficient between pan and cake (0 for the well-buttered case)
-MU = 0.0
+MU = 0.1
 
 
 def get_pancake_corners():
@@ -125,25 +129,25 @@ def collision_guards(pancake_flipper, q):
     # Transform each corner point into the flipper frame
     context = pancake_flipper.CreateDefaultContext()
     pancake_flipper.SetPositions(context, q)
-    x_a_flipper_frame = pancake_flipper.CalcPointsPosition(
+    x_a_flipper_frame = pancake_flipper.CalcPointsPositions(
         context,
         pancake_frame,
         x_a,
         flipper_frame
     )
-    x_b_flipper_frame = pancake_flipper.CalcPointsPosition(
+    x_b_flipper_frame = pancake_flipper.CalcPointsPositions(
         context,
         pancake_frame,
         x_b,
         flipper_frame
     )
-    x_c_flipper_frame = pancake_flipper.CalcPointsPosition(
+    x_c_flipper_frame = pancake_flipper.CalcPointsPositions(
         context,
         pancake_frame,
         x_c,
         flipper_frame
     )
-    x_d_flipper_frame = pancake_flipper.CalcPointsPosition(
+    x_d_flipper_frame = pancake_flipper.CalcPointsPositions(
         context,
         pancake_frame,
         x_d,
@@ -199,7 +203,7 @@ def guard_force_complementarity(pancake_flipper, vars):
 
     # Return the inner product of the two (which must be zero to enforce
     # complementarity)
-    return guards.dot(fz)
+    return guards.T.dot(fz)
 
 
 def calc_tangential_velocities(pancake_flipper, q, qdot):
@@ -314,7 +318,7 @@ def friction_cone_complementarity(pancake_flipper, vars):
 
     # Compute the inner product of the friction cone constraint with the
     # tangential velocity magnitude
-    complementarity_friction_cone = (MU * f_z - f_x_pos - f_x_neg).dot(gamma)
+    complementarity_friction_cone = (MU * f_z - f_x_pos - f_x_neg).T.dot(gamma)
 
     # Get the tangential velocities
     tangent_velocities = calc_tangential_velocities(pancake_flipper, q, qdot)
@@ -322,15 +326,16 @@ def friction_cone_complementarity(pancake_flipper, vars):
     # Compute complementarity between the positive x contact force and
     # (gamma + tangent_velocities), so that we only get friction in the +x
     # direction if we're sliding in the -x direction.
-    complementarity_sliding_negx = (gamma + tangent_velocities).dot(f_x_pos)
+    complementarity_sliding_negx = (gamma + tangent_velocities).T.dot(f_x_pos)
     # Likewise for the negative x contact force
-    complementarity_sliding_posx = (gamma - tangent_velocities).dot(f_x_neg)
+    complementarity_sliding_posx = (gamma - tangent_velocities).T.dot(f_x_neg)
 
-    # Return the concatenation of these constraints. All components must go to
-    # zero in order for the constraints to be enforced
-    return np.concatenate((complementarity_friction_cone,
-                           complementarity_sliding_negx,
-                           complementarity_sliding_posx))
+    # Return a vector containing these constraints. All components must go to
+    # zero in order for the constraints to be enforced. Remember that the
+    # individual complementarities are scalars (inner products!)
+    return np.array([complementarity_friction_cone,
+                     complementarity_sliding_negx,
+                     complementarity_sliding_posx])
 
 
 def get_pancake_corner_jacobian(pancake_flipper, context, corner_idx):
@@ -364,7 +369,7 @@ def get_pancake_corner_jacobian(pancake_flipper, context, corner_idx):
     # Select the one we want
     corner = corners_list[corner_idx]
     # Calculate the Jacobian using the plant
-    corner_jacobian = pancake_flipper.CalcJacobianTranslationVelocity(
+    corner_jacobian = pancake_flipper.CalcJacobianTranslationalVelocity(
         context,
         JacobianWrtVariable(0),
         pancake_frame,
@@ -375,6 +380,7 @@ def get_pancake_corner_jacobian(pancake_flipper, context, corner_idx):
 
     # Discard the y component since we're in 2D
     corner_jacobian = corner_jacobian[[0, 2]]
+    return corner_jacobian
 
 
 def build_pancake_flipper_plant(builder):
@@ -411,14 +417,17 @@ builder = DiagramBuilder()
 # Create the plant and scene graph
 pancake_flipper, scene_graph = build_pancake_flipper_plant(builder)
 
+# Overwrite the original MultibodyPlant with its autodiff copy
+pancake_flipper = pancake_flipper.ToAutoDiffXd()
+
 # Create the optimization problem (based on UR HW 5)
 
 # The number of time steps in the trajectory optimization
-T = 50
+T = 100
 
 # The minimum and maximum time interval is seconds
-h_min = .005
-h_max = .05
+h_min = 0.0005
+h_max = 0.05
 
 # Initialize the optimization program
 prog = MathematicalProgram()
@@ -427,12 +436,12 @@ prog = MathematicalProgram()
 # (distances between the T + 1 break points)
 h = prog.NewContinuousVariables(T, name='h')
 
-nq = 6  # number of states
+num_states = 6
 # Define decision variables for the system configuration, generalized
 # velocities, and accelerations
-q = prog.NewContinuousVariables(rows=T + 1, cols=nq, name='q')
-qdot = prog.NewContinuousVariables(rows=T + 1, cols=nq, name='qdot')
-qddot = prog.NewContinuousVariables(rows=T, cols=nq, name='qddot')
+q = prog.NewContinuousVariables(rows=T + 1, cols=num_states, name='q')
+qdot = prog.NewContinuousVariables(rows=T + 1, cols=num_states, name='qdot')
+qddot = prog.NewContinuousVariables(rows=T, cols=num_states, name='qddot')
 
 # Also define decision variables for the contact forces (x and z in flipper
 # frame) at each corner of the pancake at each timestep
@@ -447,10 +456,26 @@ f_ul = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ul')
 # Constrain our start and end states.
 # Remember that because of how we've structured the URDF, the states are
 # ordered q: 1x6 np.array [x_f, x_p, y_f, y_p, theta_f, theta_p]
-start_state = np.array([0, x, 0, x, 0, x])
+start_state = np.array([0, 0.5, 0, 0.15, 0, 0])
+final_state = np.array([0, 0.0, 0, 0.15, 0, -np.pi])
+
+zeros = np.zeros(num_states)
+# Constrain start state
+prog.AddLinearConstraint(eq(q[0], start_state))
+prog.AddLinearConstraint(eq(qdot[0], zeros))
+prog.AddLinearConstraint(eq(qddot[0], zeros))
+# Constrain end state
+prog.AddLinearConstraint(eq(q[-1], final_state))
+prog.AddLinearConstraint(eq(qdot[-1], zeros))
+prog.AddLinearConstraint(eq(qddot[-1], zeros))
+
 
 # Add a bounding box on the length of individual timesteps
 prog.AddBoundingBoxConstraint([h_min] * T, [h_max] * T, h)
+# Also constrain the time steps to form pairs of equal duration (per Posa13)
+for j in range(int((T - 3) / 2)):
+    prog.AddConstraint(
+        h[2 * j - 1] + h[2 * j] == h[2 * j + 1] + h[2 * j + 2])
 
 # Using the implicit Euler method, constrain the configuration,
 # velocity, and accelerations to be self-consistent.
@@ -472,12 +497,12 @@ for t in range(T):
                            f_ll[t], f_lr[t], f_ur[t], f_ul[t]))
     # Make an anonymous function that passes the pancake_flipper plant along
     # with the assembled variables, and use that in the constraint
-    prog.AddConstraint(
-        lambda vars: manipulator_equations(pancake_flipper, vars),
-        lb=[0] * nq,
-        ub=[0] * nq,
-        vars=vars
-    )
+    # prog.AddConstraint(
+    #     lambda vars: manipulator_equations(pancake_flipper, vars),
+    #     lb=[0] * num_states,
+    #     ub=[0] * num_states,
+    #     vars=vars
+    # )
 
 # Now we have the (only somewhat onerous) task of constraining the contact
 # forces at all timesteps. More specifically, we need to constrain:
@@ -492,7 +517,7 @@ for t in range(T):
 # 1.) Contact guards are nonnegative at all times
 for t in range(T):
     prog.AddConstraint(lambda vars: collision_guards(pancake_flipper, vars),
-                       lb=[0], ub=[np.inf], vars=q[t])
+                       lb=[0] * 4, ub=[np.inf] * 4, vars=q[t])
 
 # To express the contact constraints, it is useful to break the tangential
 # force into two trictly non-negative components (i.e. fx = fx^+ - fx^-).
@@ -559,7 +584,7 @@ for t in range(T):
     vars = np.concatenate((q[t], qdot[t], gamma[t]))
     prog.AddConstraint(
         lambda vars: gamma_vs_abs_tangential_velocity(pancake_flipper, vars),
-        lb=[0], ub=[np.inf], vars=vars
+        lb=[0] * 8, ub=[np.inf] * 8, vars=vars
     )
 
     # 5.) Sliding only occurs when we're at the edge of the friction cone
@@ -569,17 +594,17 @@ for t in range(T):
     vars = np.concatenate((q[t], qdot[t], gamma[t],
                            f_ll[t], f_lr[t], f_ur[t], f_ul[t],
                            f_ll_x[t], f_lr_x[t], f_ur_x[t], f_ul_x[t]))
-    num_corners = 4
-    prog.AddConstraint(
-        lambda vars: friction_cone_complementarity(pancake_flipper, vars),
-        lb=[0] * 3 * num_corners, ub=[0] * 3 * num_corners, vars=vars
-    )
+    # prog.AddConstraint(
+    #     lambda vars: friction_cone_complementarity(pancake_flipper, vars),
+    #     lb=[0] * 3, ub=[0] * 3, vars=vars
+    # )
 
 # Now we should have defined all of our constraints, so we just need to
 # seed the solver with an initial guess
 
 # Create a vector to store the initial guess
-initial_guess = np.empty(prog.num_vars())
+# Unless we explicitly set a guess here, our initial guess will just be zero
+initial_guess = np.zeros(prog.num_vars())
 
 # Add our initial guess for the time step: each timestep takes its maximum
 # duration.
@@ -590,29 +615,77 @@ prog.SetDecisionVariableValueInVector(h, [h_guess] * T, initial_guess)
 # interpolation of the configuration between the start and target states.
 # This trajectory will be INFEASIBLE initiall, so we'll see if we need a more
 # refined initial guess
-q0_guess = np.array([0, 0, .15, -.3])
 q_guess_poly = PiecewisePolynomial.FirstOrderHold(
     [0, T * h_guess],
-    np.column_stack((q0_guess, - q0_guess))
+    np.column_stack((start_state, final_state))
 )
-qd_guess_poly = q_guess_poly.derivative()
-qdd_guess_poly = q_guess_poly.derivative()
+qdot_guess_poly = q_guess_poly.derivative()
+qddot_guess_poly = qdot_guess_poly.derivative()
 
-# set initial guess for configuration, velocity, and acceleration
+# Set our initial guess for configuration, velocity, and acceleration based
+# on the linear interpolation
 q_guess = np.hstack([q_guess_poly.value(t * h_guess) for t in range(T + 1)]).T
-qd_guess = np.hstack([qd_guess_poly.value(t * h_guess) for t in range(T + 1)]).T
-qdd_guess = np.hstack([qdd_guess_poly.value(t * h_guess) for t in range(T)]).T
+qd_guess = np.hstack(
+    [qdot_guess_poly.value(t * h_guess) for t in range(T + 1)]).T
+qdd_guess = np.hstack(
+    [qddot_guess_poly.value(t * h_guess) for t in range(T)]).T
 prog.SetDecisionVariableValueInVector(q, q_guess, initial_guess)
-prog.SetDecisionVariableValueInVector(qd, qd_guess, initial_guess)
-prog.SetDecisionVariableValueInVector(qdd, qdd_guess, initial_guess)
+prog.SetDecisionVariableValueInVector(qdot, qd_guess, initial_guess)
+prog.SetDecisionVariableValueInVector(qddot, qdd_guess, initial_guess)
 
-# TODO: Add initial guess for trajectory (how to make a feasible one?)
-#           Maybe just up, flip, down?
-# TODO: Add initial guess for forces (0?)
+# Don't set a guess for the contact forces, just leaving them at zero
 
-# TODO: Solve?
-# TODO: Hope it works?
-# TODO: Delete previous question marks!
+# Solve the mathematical program with our initial guess
+solver = SnoptSolver()
+result = solver.Solve(prog, initial_guess)
 
-# TODO: Extract optimal solution
-# TODO: Animate
+# Check if a solution was found
+assert result.is_success(), "Solution not found :("
+
+# Extract the optimal solution
+h_opt = result.GetSolution(h)
+q_opt = result.GetSolution(q)
+qd_opt = result.GetSolution(qdot)
+qdd_opt = result.GetSolution(qddot)
+
+# stack states
+x_opt = np.hstack((q_opt, qd_opt))
+
+# interpolate state values for animation
+time_breaks_opt = np.array([sum(h_opt[:t]) for t in range(T + 1)])
+x_opt_poly = PiecewisePolynomial.FirstOrderHold(time_breaks_opt, x_opt.T)
+
+# Get a new plant and scene graph to animate
+pancake_flipper = MultibodyPlant(time_step=0)
+scene_graph = SceneGraph()
+pancake_flipper.RegisterAsSourceForSceneGraph(scene_graph)
+file_name = './models/pancake_flipper_massless_links.urdf'
+Parser(pancake_flipper).AddModelFromFile(file_name)
+pancake_flipper.Finalize()
+
+# build block diagram and drive system state with
+# the trajectory from the optimization problem
+builder = DiagramBuilder()
+source = builder.AddSystem(TrajectorySource(x_opt_poly))
+builder.AddSystem(scene_graph)
+pos_to_pose = builder.AddSystem(
+    MultibodyPositionToGeometryPose(
+        pancake_flipper, input_multibody_state=True))
+builder.Connect(source.get_output_port(0), pos_to_pose.get_input_port())
+builder.Connect(
+    pos_to_pose.get_output_port(),
+    scene_graph.get_source_pose_port(pancake_flipper.get_source_id()))
+
+# add visualizer
+xlim = [-.75, 1.]
+ylim = [-.2, 1.5]
+visualizer = builder.AddSystem(
+    PlanarSceneGraphVisualizer(scene_graph, xlim=xlim, ylim=ylim))
+builder.Connect(
+    scene_graph.get_pose_bundle_output_port(), visualizer.get_input_port(0))
+simulator = Simulator(builder.Build())
+
+# generate and display animation
+visualizer.start_recording()
+simulator.AdvanceTo(x_opt_poly.end_time())
+ani = visualizer.get_recording_as_animation()
