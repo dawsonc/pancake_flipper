@@ -7,18 +7,20 @@ Written by C. Dawson (cbd@mit.edu)
 '''
 # Python libraries
 import numpy as np
-import matplotlib.pyplot as plt
 
 # PyDrake imports
 from pydrake.all import (
     AddMultibodyPlantSceneGraph, DiagramBuilder, Parser,
-    MathematicalProgram, SnoptSolver, SolverOptions, eq, ge,
+    MathematicalProgram, SnoptSolver, eq, ge,
     JacobianWrtVariable,
     PiecewisePolynomial,
     TrajectorySource, MultibodyPositionToGeometryPose,
     PlanarSceneGraphVisualizer, Simulator,
     MultibodyPlant, SceneGraph
 )
+
+import time
+import matplotlib.animation as animation
 
 # Record the *half* extents of the flipper and pancake geometry
 FLIPPER_H = 0.1
@@ -27,7 +29,7 @@ PANCAKE_H = 0.05
 PANCAKE_W = 0.25
 
 # Friction coefficient between pan and cake (0 for the well-buttered case)
-MU = 0.1
+MU = 0.0
 
 
 def get_pancake_corners():
@@ -61,6 +63,7 @@ def manipulator_equations(pancake_flipper, vars):
                     - pancake flipper configuration
                     - configuration velocity
                     - configuration acceleration
+                    - generalized forces
                     - contact forces (x and z) at each corner of the pancake,
                       arranged as [lower left, lower right, upper right,
                       upper left]
@@ -72,9 +75,9 @@ def manipulator_equations(pancake_flipper, vars):
     n_states = 6
     n_corners = 4
     n_forces = 2
-    assert vars.size == 3 * n_states + n_corners * n_forces
-    split_at_indices = [n_states, 2 * n_states, 3 * n_states]
-    q, qdot, qddot, f = np.split(vars, split_at_indices)
+    assert vars.size == 4 * n_states + n_corners * n_forces
+    split_at_indices = [n_states, 2 * n_states, 3 * n_states, 4 * n_states]
+    q, qdot, qddot, u, f = np.split(vars, split_at_indices)
     split_at_indices = [n_forces, 2 * n_forces, 3 * n_forces]
     f_ll, f_lr, f_ur, f_ul = np.split(f, split_at_indices)
 
@@ -87,6 +90,7 @@ def manipulator_equations(pancake_flipper, vars):
     M = pancake_flipper.CalcMassMatrixViaInverseDynamics(context)
     Cv = pancake_flipper.CalcBiasTerm(context)
     tauG = pancake_flipper.CalcGravityGeneralizedForces(context)
+    B = np.eye(n_states)
 
     # Calculate the contact Jacobian for each corner
     J_ll = get_pancake_corner_jacobian(pancake_flipper, context, 0)
@@ -95,10 +99,10 @@ def manipulator_equations(pancake_flipper, vars):
     J_ul = get_pancake_corner_jacobian(pancake_flipper, context, 3)
 
     # Return the violation of the manipulator equation
-    return M.dot(qddot) + Cv - tauG - J_ll.T.dot(f_ll) \
-                                    - J_lr.T.dot(f_lr) \
-                                    - J_ur.T.dot(f_ur) \
-                                    - J_ul.T.dot(f_ul)
+    return M.dot(qddot) + Cv - tauG - B.dot(u) - J_ll.T.dot(f_ll) \
+                                               - J_lr.T.dot(f_lr) \
+                                               - J_ur.T.dot(f_ur) \
+                                               - J_ul.T.dot(f_ul)
 
 
 def collision_guards(pancake_flipper, q):
@@ -291,8 +295,8 @@ def friction_cone_complementarity(pancake_flipper, vars):
                       corner of the pancake, arranged as [lower left,
                       lower right, upper right, upper left]
     @param pancake_flipper: a MultibodyPlant representing the pancake flipper
-    @returns the inner product of the four contact guards and the z components
-             of the four forces.
+    @returns a vector whose components must be zero in order for the solution
+             to be dynamically valid.
     '''
     # Split vars into subvariables
     n_states = 6
@@ -318,7 +322,8 @@ def friction_cone_complementarity(pancake_flipper, vars):
 
     # Compute the inner product of the friction cone constraint with the
     # tangential velocity magnitude
-    complementarity_friction_cone = (MU * f_z - f_x_pos - f_x_neg).T.dot(gamma)
+    complementarity_friction_cone = np.multiply((MU * f_z - f_x_pos - f_x_neg),
+                                                gamma)
 
     # Get the tangential velocities
     tangent_velocities = calc_tangential_velocities(pancake_flipper, q, qdot)
@@ -326,16 +331,17 @@ def friction_cone_complementarity(pancake_flipper, vars):
     # Compute complementarity between the positive x contact force and
     # (gamma + tangent_velocities), so that we only get friction in the +x
     # direction if we're sliding in the -x direction.
-    complementarity_sliding_negx = (gamma + tangent_velocities).T.dot(f_x_pos)
+    complementarity_sliding_negx = np.multiply((gamma + tangent_velocities),
+                                               f_x_pos)
     # Likewise for the negative x contact force
-    complementarity_sliding_posx = (gamma - tangent_velocities).T.dot(f_x_neg)
+    complementarity_sliding_posx = np.multiply((gamma - tangent_velocities),
+                                               f_x_neg)
 
     # Return a vector containing these constraints. All components must go to
-    # zero in order for the constraints to be enforced. Remember that the
-    # individual complementarities are scalars (inner products!)
-    return np.array([complementarity_friction_cone,
-                     complementarity_sliding_negx,
-                     complementarity_sliding_posx])
+    # zero in order for the constraints to be enforced.
+    return np.concatenate([complementarity_friction_cone,
+                           complementarity_sliding_negx,
+                           complementarity_sliding_posx])
 
 
 def get_pancake_corner_jacobian(pancake_flipper, context, corner_idx):
@@ -442,6 +448,8 @@ num_states = 6
 q = prog.NewContinuousVariables(rows=T + 1, cols=num_states, name='q')
 qdot = prog.NewContinuousVariables(rows=T + 1, cols=num_states, name='qdot')
 qddot = prog.NewContinuousVariables(rows=T, cols=num_states, name='qddot')
+# Control inputs: x, y, and theta for the flipper
+u = prog.NewContinuousVariables(rows=T, cols=num_states, name='u')
 
 # Also define decision variables for the contact forces (x and z in flipper
 # frame) at each corner of the pancake at each timestep
@@ -456,7 +464,7 @@ f_ul = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ul')
 # Constrain our start and end states.
 # Remember that because of how we've structured the URDF, the states are
 # ordered q: 1x6 np.array [x_f, x_p, y_f, y_p, theta_f, theta_p]
-start_state = np.array([0, 0.5, 0, 0.15, 0, 0])
+start_state = np.array([0, 0.0, 0, 0.15, 0, 0])
 final_state = np.array([0, 0.0, 0, 0.15, 0, -np.pi])
 
 zeros = np.zeros(num_states)
@@ -477,6 +485,23 @@ for j in range(int((T - 3) / 2)):
     prog.AddConstraint(
         h[2 * j - 1] + h[2 * j] == h[2 * j + 1] + h[2 * j + 2])
 
+# We can only control x, y, and theta generalized forces on flipper,
+# so we need to zero out everything else.
+#
+# The controls we do have are bounded, so add those constraints too
+u_abs_max = 10
+for t in range(T):
+    prog.AddConstraint(u[t, 1] == 0)
+    prog.AddConstraint(u[t, 3] == 0)
+    prog.AddConstraint(u[t, 5] == 0)
+
+    # prog.AddConstraint(u[t, 0] <= u_abs_max)
+    # prog.AddConstraint(-u[t, 0] <= u_abs_max)
+    # prog.AddConstraint(u[t, 2] <= u_abs_max)
+    # prog.AddConstraint(-u[t, 2] <= u_abs_max)
+    # prog.AddConstraint(u[t, 4] <= u_abs_max)
+    # prog.AddConstraint(-u[t, 4] <= u_abs_max)
+
 # Using the implicit Euler method, constrain the configuration,
 # velocity, and accelerations to be self-consistent.
 # Note: we're not worried about satisfying the dynamics here, just
@@ -493,16 +518,16 @@ for t in range(T):
     #   - velocity
     #   - acceleration
     #   - contact forces (ll, lr, ur, ul)
-    vars = np.concatenate((q[t + 1], qdot[t + 1], qddot[t],
+    vars = np.concatenate((q[t + 1], qdot[t + 1], qddot[t], u[t],
                            f_ll[t], f_lr[t], f_ur[t], f_ul[t]))
     # Make an anonymous function that passes the pancake_flipper plant along
     # with the assembled variables, and use that in the constraint
-    # prog.AddConstraint(
-    #     lambda vars: manipulator_equations(pancake_flipper, vars),
-    #     lb=[0] * num_states,
-    #     ub=[0] * num_states,
-    #     vars=vars
-    # )
+    prog.AddConstraint(
+        lambda vars: manipulator_equations(pancake_flipper, vars),
+        lb=[0] * num_states,
+        ub=[0] * num_states,
+        vars=vars
+    )
 
 # Now we have the (only somewhat onerous) task of constraining the contact
 # forces at all timesteps. More specifically, we need to constrain:
@@ -596,7 +621,7 @@ for t in range(T):
                            f_ll_x[t], f_lr_x[t], f_ur_x[t], f_ul_x[t]))
     # prog.AddConstraint(
     #     lambda vars: friction_cone_complementarity(pancake_flipper, vars),
-    #     lb=[0] * 3, ub=[0] * 3, vars=vars
+    #     lb=[0] * 12, ub=[0] * 12, vars=vars
     # )
 
 # Now we should have defined all of our constraints, so we just need to
@@ -632,8 +657,6 @@ qdd_guess = np.hstack(
 prog.SetDecisionVariableValueInVector(q, q_guess, initial_guess)
 prog.SetDecisionVariableValueInVector(qdot, qd_guess, initial_guess)
 prog.SetDecisionVariableValueInVector(qddot, qdd_guess, initial_guess)
-
-# Don't set a guess for the contact forces, just leaving them at zero
 
 # Solve the mathematical program with our initial guess
 solver = SnoptSolver()
@@ -677,8 +700,8 @@ builder.Connect(
     scene_graph.get_source_pose_port(pancake_flipper.get_source_id()))
 
 # add visualizer
-xlim = [-.75, 1.]
-ylim = [-.2, 1.5]
+xlim = [-3, 3.]
+ylim = [-3, 7]
 visualizer = builder.AddSystem(
     PlanarSceneGraphVisualizer(scene_graph, xlim=xlim, ylim=ylim))
 builder.Connect(
@@ -689,3 +712,8 @@ simulator = Simulator(builder.Build())
 visualizer.start_recording()
 simulator.AdvanceTo(x_opt_poly.end_time())
 ani = visualizer.get_recording_as_animation()
+
+# Set up formatting for the movie files
+Writer = animation.writers['ffmpeg']
+writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
+ani.save('did_it_work' + str(time.now) + '.mp4', writer=writer)
