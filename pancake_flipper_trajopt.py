@@ -670,6 +670,11 @@ h_opt = result.GetSolution(h)
 q_opt = result.GetSolution(q)
 qd_opt = result.GetSolution(qdot)
 qdd_opt = result.GetSolution(qddot)
+u_opt = result.GetSolution(u)
+f_ll_opt = result.GetSolution(f_ll)
+f_lr_opt = result.GetSolution(f_lr)
+f_ur_opt = result.GetSolution(f_ur)
+f_ul_opt = result.GetSolution(f_ul)
 
 # stack states
 x_opt = np.hstack((q_opt, qd_opt))
@@ -716,4 +721,16 @@ ani = visualizer.get_recording_as_animation()
 # Set up formatting for the movie files
 Writer = animation.writers['ffmpeg']
 writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
-ani.save('did_it_work' + str(time.now) + '.mp4', writer=writer)
+time_save = str(time.now())
+ani.save('results/animation' + time_save + '.mp4', writer=writer)
+
+np.savez('results/trace' + 'time_save' + '.npz',
+         h_opt=h_opt,
+         q_opt=q_opt,
+         qd_opt=qd_opt,
+         qdd_opt=qdd_opt,
+         u_opt=u_opt,
+         f_ll_opt=f_ll_opt,
+         f_lr_opt=f_lr_opt,
+         f_ur_opt=f_ur_opt,
+         f_ul_opt=f_ul_opt)
