@@ -1,0 +1,33 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+datafile = 'results/interesting/many_bounce_trace_umax30_ceiling2.npz'
+npzfile = np.load(datafile)
+
+# Construct time from time intervals
+t = np.cumsum(npzfile['h_opt'])
+T = len(t)
+
+# Extract the other quantities of interest
+q_opt = npzfile['q_opt']
+qd_opt = npzfile['qd_opt']
+qdd_opt = npzfile['qdd_opt']
+u_opt = npzfile['u_opt']
+f_ll_opt = npzfile['f_ll_opt']
+f_lr_opt = npzfile['f_lr_opt']
+f_ur_opt = npzfile['f_ur_opt']
+f_ul_opt = npzfile['f_ul_opt']
+
+# plt.plot(t, u_opt[:, 0], label='Flipper x force')
+# plt.plot(t, u_opt[:, 2], label='Flipper y force')
+# plt.plot(t, u_opt[:, 4], label='Flipper theta torque')
+plt.plot(t, f_ul_opt[:, 1], label='ul z')
+# plt.plot(t, qd_opt[:T, 0], label='Velocity x')
+# plt.plot(t, qd_opt[:T, 2], label='Velocity y')
+# plt.plot(t, qd_opt[:T, 4], label='Velocity theta')
+plt.xlabel('Time (s)')
+# plt.ylabel('Velocity')
+plt.ylim([-60, 60])
+plt.grid(True)
+plt.legend()
+plt.show()

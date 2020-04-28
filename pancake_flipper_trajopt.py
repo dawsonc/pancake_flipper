@@ -24,12 +24,12 @@ import matplotlib.animation as animation
 
 # Record the *half* extents of the flipper and pancake geometry
 FLIPPER_H = 0.1
-FLIPPER_W = 0.75
+FLIPPER_W = 1.0
 PANCAKE_H = 0.05
 PANCAKE_W = 0.25
 
 # Friction coefficient between pan and cake (0 for the well-buttered case)
-MU = 0.0
+MU = 0.1
 
 
 def get_pancake_corners():
@@ -429,10 +429,10 @@ pancake_flipper = pancake_flipper.ToAutoDiffXd()
 # Create the optimization problem (based on UR HW 5)
 
 # The number of time steps in the trajectory optimization
-T = 100
+T = 200
 
 # The minimum and maximum time interval is seconds
-h_min = 0.0005
+h_min = 0.0002
 h_max = 0.05
 
 # Initialize the optimization program
@@ -489,18 +489,23 @@ for j in range(int((T - 3) / 2)):
 # so we need to zero out everything else.
 #
 # The controls we do have are bounded, so add those constraints too
-u_abs_max = 10
+u_abs_max = 20
 for t in range(T):
     prog.AddConstraint(u[t, 1] == 0)
     prog.AddConstraint(u[t, 3] == 0)
     prog.AddConstraint(u[t, 5] == 0)
 
-    # prog.AddConstraint(u[t, 0] <= u_abs_max)
-    # prog.AddConstraint(-u[t, 0] <= u_abs_max)
-    # prog.AddConstraint(u[t, 2] <= u_abs_max)
-    # prog.AddConstraint(-u[t, 2] <= u_abs_max)
-    # prog.AddConstraint(u[t, 4] <= u_abs_max)
-    # prog.AddConstraint(-u[t, 4] <= u_abs_max)
+    prog.AddConstraint(u[t, 0] <= u_abs_max)
+    prog.AddConstraint(-u[t, 0] <= u_abs_max)
+    prog.AddConstraint(u[t, 2] <= u_abs_max)
+    prog.AddConstraint(-u[t, 2] <= u_abs_max)
+    prog.AddConstraint(u[t, 4] <= u_abs_max)
+    prog.AddConstraint(-u[t, 4] <= u_abs_max)
+
+# We don't want to shoot the pancake into the ceiling
+ceiling_z = 5
+prog.AddBoundingBoxConstraint([-np.inf] * (T + 1),
+                              [ceiling_z] * (T + 1), q[:, 3])
 
 # Using the implicit Euler method, constrain the configuration,
 # velocity, and accelerations to be self-consistent.
@@ -704,9 +709,23 @@ builder.Connect(
     pos_to_pose.get_output_port(),
     scene_graph.get_source_pose_port(pancake_flipper.get_source_id()))
 
-# add visualizer
-xlim = [-3, 3.]
-ylim = [-3, 7]
+# add visualizer (set limits based on max and min state)
+max_flipper_x = np.max(q_opt[:, 0])
+max_pancake_x = np.max(q_opt[:, 1])
+min_flipper_x = np.min(q_opt[:, 0])
+min_pancake_x = np.min(q_opt[:, 1])
+max_x = max(max_flipper_x, max_pancake_x)
+min_x = min(min_flipper_x, min_pancake_x)
+
+max_flipper_y = np.max(q_opt[:, 2])
+max_pancake_y = np.max(q_opt[:, 3])
+min_flipper_y = np.min(q_opt[:, 2])
+min_pancake_y = np.min(q_opt[:, 3])
+max_y = max(max_flipper_y, max_pancake_y)
+min_y = min(min_flipper_y, min_pancake_y)
+
+xlim = [min_x - 3, max_x + 3]
+ylim = [min_y - 2, max_y + 2]
 visualizer = builder.AddSystem(
     PlanarSceneGraphVisualizer(scene_graph, xlim=xlim, ylim=ylim))
 builder.Connect(
@@ -721,10 +740,10 @@ ani = visualizer.get_recording_as_animation()
 # Set up formatting for the movie files
 Writer = animation.writers['ffmpeg']
 writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
-time_save = str(time.now())
-ani.save('results/animation' + time_save + '.mp4', writer=writer)
+stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z)
+ani.save('results/animation' + stamp + '.mp4', writer=writer)
 
-np.savez('results/trace' + 'time_save' + '.npz',
+np.savez('results/trace' + stamp + '.npz',
          h_opt=h_opt,
          q_opt=q_opt,
          qd_opt=qd_opt,
