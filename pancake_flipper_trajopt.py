@@ -73,10 +73,12 @@ def manipulator_equations(pancake_flipper, vars):
     '''
     # Split vars into subvariables
     n_states = 6
+    n_inputs = 3
     n_corners = 4
     n_forces = 2
-    assert vars.size == 4 * n_states + n_corners * n_forces
-    split_at_indices = [n_states, 2 * n_states, 3 * n_states, 4 * n_states]
+    assert vars.size == 3 * n_states + n_inputs + n_corners * n_forces
+    split_at_indices = [n_states, 2 * n_states, 3 * n_states,
+                        3 * n_states + n_inputs]
     q, qdot, qddot, u, f = np.split(vars, split_at_indices)
     split_at_indices = [n_forces, 2 * n_forces, 3 * n_forces]
     f_ll, f_lr, f_ur, f_ul = np.split(f, split_at_indices)
@@ -90,7 +92,10 @@ def manipulator_equations(pancake_flipper, vars):
     M = pancake_flipper.CalcMassMatrixViaInverseDynamics(context)
     Cv = pancake_flipper.CalcBiasTerm(context)
     tauG = pancake_flipper.CalcGravityGeneralizedForces(context)
-    B = np.eye(n_states)
+    B = np.zeros((n_states, n_inputs))
+    B[0, 0] = 1
+    B[2, 1] = 1
+    B[4, 2] = 1
 
     # Calculate the contact Jacobian for each corner
     J_ll = get_pancake_corner_jacobian(pancake_flipper, context, 0)
@@ -429,7 +434,7 @@ pancake_flipper = pancake_flipper.ToAutoDiffXd()
 # Create the optimization problem (based on UR HW 5)
 
 # The number of time steps in the trajectory optimization
-T = 200
+T = 60
 
 # The minimum and maximum time interval is seconds
 h_min = 0.0002
@@ -443,13 +448,14 @@ prog = MathematicalProgram()
 h = prog.NewContinuousVariables(T, name='h')
 
 num_states = 6
+num_inputs = 3
 # Define decision variables for the system configuration, generalized
 # velocities, and accelerations
 q = prog.NewContinuousVariables(rows=T + 1, cols=num_states, name='q')
 qdot = prog.NewContinuousVariables(rows=T + 1, cols=num_states, name='qdot')
 qddot = prog.NewContinuousVariables(rows=T, cols=num_states, name='qddot')
 # Control inputs: x, y, and theta for the flipper
-u = prog.NewContinuousVariables(rows=T, cols=num_states, name='u')
+u = prog.NewContinuousVariables(rows=T, cols=num_inputs, name='u')
 
 # Also define decision variables for the contact forces (x and z in flipper
 # frame) at each corner of the pancake at each timestep
@@ -464,8 +470,8 @@ f_ul = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ul')
 # Constrain our start and end states.
 # Remember that because of how we've structured the URDF, the states are
 # ordered q: 1x6 np.array [x_f, x_p, y_f, y_p, theta_f, theta_p]
-start_state = np.array([0, 0.0, 0, 0.15, 0, 0])
-final_state = np.array([0, 0.0, 0, 0.15, 0, -np.pi])
+start_state = np.array([0, 0.5, 0, 0.15, 0, 0])
+final_state = np.array([0, 0.0, 0, 0.15, 0, 0])
 
 zeros = np.zeros(num_states)
 # Constrain start state
@@ -489,18 +495,14 @@ for j in range(int((T - 3) / 2)):
 # so we need to zero out everything else.
 #
 # The controls we do have are bounded, so add those constraints too
-u_abs_max = 20
+u_abs_max = 40
 for t in range(T):
-    prog.AddConstraint(u[t, 1] == 0)
-    prog.AddConstraint(u[t, 3] == 0)
-    prog.AddConstraint(u[t, 5] == 0)
-
     prog.AddConstraint(u[t, 0] <= u_abs_max)
     prog.AddConstraint(-u[t, 0] <= u_abs_max)
+    prog.AddConstraint(u[t, 1] <= u_abs_max)
+    prog.AddConstraint(-u[t, 1] <= u_abs_max)
     prog.AddConstraint(u[t, 2] <= u_abs_max)
     prog.AddConstraint(-u[t, 2] <= u_abs_max)
-    prog.AddConstraint(u[t, 4] <= u_abs_max)
-    prog.AddConstraint(-u[t, 4] <= u_abs_max)
 
 # We don't want to shoot the pancake into the ceiling
 ceiling_z = 5
@@ -740,10 +742,10 @@ ani = visualizer.get_recording_as_animation()
 # Set up formatting for the movie files
 Writer = animation.writers['ffmpeg']
 writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
-stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z)
-ani.save('results/animation' + stamp + '.mp4', writer=writer)
+stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z) + "_T" + str(T)
+ani.save('results/slide_animation' + stamp + '.mp4', writer=writer)
 
-np.savez('results/trace' + stamp + '.npz',
+np.savez('results/slide_trace' + stamp + '.npz',
          h_opt=h_opt,
          q_opt=q_opt,
          qd_opt=qd_opt,

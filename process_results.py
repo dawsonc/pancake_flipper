@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-datafile = 'results/interesting/many_bounce_trace_umax30_ceiling2.npz'
+datafile = 'results/slide_trace_umax50_ceiling5_T60.npz'
 npzfile = np.load(datafile)
 
 # Construct time from time intervals
@@ -18,10 +18,14 @@ f_lr_opt = npzfile['f_lr_opt']
 f_ur_opt = npzfile['f_ur_opt']
 f_ul_opt = npzfile['f_ul_opt']
 
-# plt.plot(t, u_opt[:, 0], label='Flipper x force')
-# plt.plot(t, u_opt[:, 2], label='Flipper y force')
-# plt.plot(t, u_opt[:, 4], label='Flipper theta torque')
-plt.plot(t, f_ul_opt[:, 1], label='ul z')
+plt.plot(t, u_opt[:, 0], label='Flipper x force')
+plt.plot(t, u_opt[:, 1], label='Flipper z force')
+plt.plot(t, u_opt[:, 2], label='Flipper theta torque')
+# plt.plot(t, f_ul_opt[:, 1], label='ul z', marker='o')
+plt.plot(t, f_ll_opt[:, 0], label='ll x', marker='x')
+plt.plot(t, f_ll_opt[:, 1], label='ll z', marker='x')
+plt.plot(t, f_lr_opt[:, 0], label='lr x', marker='x')
+plt.plot(t, f_lr_opt[:, 1], label='lr z', marker='x')
 # plt.plot(t, qd_opt[:T, 0], label='Velocity x')
 # plt.plot(t, qd_opt[:T, 2], label='Velocity y')
 # plt.plot(t, qd_opt[:T, 4], label='Velocity theta')
