@@ -748,9 +748,9 @@ Writer = animation.writers['ffmpeg']
 writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
 stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z) + \
         '_mu' + str(MU) + '_T' + str(T)
-ani.save('results/test_flip_animation' + stamp + '.mp4', writer=writer)
+ani.save('results/arm_viz_animation' + stamp + '.mp4', writer=writer)
 
-np.savez('results/test_flip_trace' + stamp + '.npz',
+np.savez('results/arm_viz_trace' + stamp + '.npz',
          h_opt=h_opt,
          q_opt=q_opt,
          qd_opt=qd_opt,
