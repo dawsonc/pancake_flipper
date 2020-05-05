@@ -511,7 +511,16 @@ for t in range(T):
 # We don't want to shoot the pancake into the ceiling
 ceiling_z = 5
 prog.AddBoundingBoxConstraint([-np.inf] * (T + 1),
-                              [ceiling_z] * (T + 1), q[:, 3])
+                              [ceiling_z] * (T + 1), q[:, 2])
+
+# We also want to minimize the lowest point, to make sure the trajectories are
+# feasible when run on an arm visualization
+min_z = prog.NewContinuousVariables(1)
+prog.AddConstraint(min_z[0] >= -100)
+for t in range(T):
+    prog.AddConstraint(min_z[0] <= q[t, 2])
+# Penalize min_z
+prog.AddCost(min_z[0])
 
 # Using the implicit Euler method, constrain the configuration,
 # velocity, and accelerations to be self-consistent.
@@ -748,9 +757,9 @@ Writer = animation.writers['ffmpeg']
 writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
 stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z) + \
         '_mu' + str(MU) + '_T' + str(T)
-ani.save('results/arm_viz_animation' + stamp + '.mp4', writer=writer)
+ani.save('results/arm_viz2_animation' + stamp + '.mp4', writer=writer)
 
-np.savez('results/arm_viz_trace' + stamp + '.npz',
+np.savez('results/arm_viz2_trace' + stamp + '.npz',
          h_opt=h_opt,
          q_opt=q_opt,
          qd_opt=qd_opt,

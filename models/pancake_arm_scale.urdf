@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+
+<robot name="pancake_flipper">
+
+  <link name="pancake">
+
+    <inertial>
+      <origin xyz="0 0 0" />
+      <mass value="0.5" />
+      <inertia ixx="0.5"  ixy="0"  ixz="0" iyy="0.5" iyz="0" izz="0.5" />
+    </inertial>
+
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+         <box size="0.125 0.125 0.025" />
+      </geometry>
+      <material>
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+         <box size="0.125 0.125 0.025" />
+      </geometry>
+
+      <drake:proximity_properties>
+          <drake:mesh_resolution_hint value="2.5"/>
+          <drake:elastic_modulus value="3.5" />
+          <drake:hunt_crossley_dissipation value="3.5" />
+          <drake:mu_static value="0.1" />
+      </drake:proximity_properties>
+    </collision>
+
+  </link>
+
+  <!--
+    It seems like Drake doesn't support a standard floating base,
+    so we need to emulate the floating base for each body using two
+    prismatic joints and one continuous revolute joint, as mentioned
+    in Issue #3089 on Drake's GitHub.
+
+    To support these various joints, we need dummy massless bodies to
+    serve as intermediates
+   -->
+
+  <link name="pancake_dummy_1"></link>
+  <link name="pancake_dummy_2"></link>
+
+   <joint name="x_p" type="prismatic">
+    <parent link="world" />
+    <child link="pancake_dummy_1" />
+    <origin xyz="0 0 0" />
+    <axis xyz="1 0 0" />
+  </joint>
+  <joint name="z_p" type="prismatic">
+    <parent link="pancake_dummy_1" />
+    <child link="pancake_dummy_2" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+  <joint name="theta_p" type="continuous">
+    <parent link="pancake_dummy_2" />
+    <child link="pancake" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 1 0" />
+  </joint>
+
+</robot>
