@@ -29,7 +29,7 @@ PANCAKE_H = 0.05
 PANCAKE_W = 0.25
 
 # Friction coefficient between pan and cake (0 for the well-buttered case)
-MU = 0.1
+MU = 0.0
 
 
 def get_pancake_corners():
@@ -167,10 +167,14 @@ def collision_guards(pancake_flipper, q):
     # distance from each corner to the flipper is simply its z coordinate
     # in the flipper frame offset by the half height of the flipper
     # TODO: relax this assumption
-    phi_a = x_a_flipper_frame[2] - np.sign(x_a_flipper_frame[2]) * FLIPPER_H
-    phi_b = x_b_flipper_frame[2] - np.sign(x_b_flipper_frame[2]) * FLIPPER_H
-    phi_c = x_c_flipper_frame[2] - np.sign(x_c_flipper_frame[2]) * FLIPPER_H
-    phi_d = x_d_flipper_frame[2] - np.sign(x_d_flipper_frame[2]) * FLIPPER_H
+    # phi_a = x_a_flipper_frame[2] - np.sign(x_a_flipper_frame[2]) * FLIPPER_H
+    # phi_b = x_b_flipper_frame[2] - np.sign(x_b_flipper_frame[2]) * FLIPPER_H
+    # phi_c = x_c_flipper_frame[2] - np.sign(x_c_flipper_frame[2]) * FLIPPER_H
+    # phi_d = x_d_flipper_frame[2] - np.sign(x_d_flipper_frame[2]) * FLIPPER_H
+    phi_a = x_a_flipper_frame[2] - FLIPPER_H
+    phi_b = x_b_flipper_frame[2] - FLIPPER_H
+    phi_c = x_c_flipper_frame[2] - FLIPPER_H
+    phi_d = x_d_flipper_frame[2] - FLIPPER_H
 
     # Return the signed distances
     return np.array([phi_a, phi_b, phi_c, phi_d])
@@ -412,7 +416,7 @@ def build_pancake_flipper_plant(builder):
         time_step=0.0  # discrete update period, or zero for continuous systems
     )
 
-    # parse the urdf and populate the vibrating pendulum
+    # parse the urdf and populate the plant
     urdf_path = './models/pancake_flipper_massless_links.urdf'
     Parser(pancake_flipper).AddModelFromFile(urdf_path)
 
@@ -470,8 +474,8 @@ f_ul = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ul')
 # Constrain our start and end states.
 # Remember that because of how we've structured the URDF, the states are
 # ordered q: 1x6 np.array [x_f, x_p, y_f, y_p, theta_f, theta_p]
-start_state = np.array([0, 0.5, 0, 0.15, 0, 0])
-final_state = np.array([0, 0.0, 0, 0.15, 0, 0])
+start_state = np.array([0, 0.0, 0, 0.15, 0, 0])
+final_state = np.array([0, 0.0, 0, 0.15, 0, -np.pi])
 
 zeros = np.zeros(num_states)
 # Constrain start state
@@ -742,10 +746,11 @@ ani = visualizer.get_recording_as_animation()
 # Set up formatting for the movie files
 Writer = animation.writers['ffmpeg']
 writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
-stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z) + "_T" + str(T)
-ani.save('results/slide_animation' + stamp + '.mp4', writer=writer)
+stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z) + \
+        '_mu' + str(MU) + '_T' + str(T)
+ani.save('results/test_flip_animation' + stamp + '.mp4', writer=writer)
 
-np.savez('results/slide_trace' + stamp + '.npz',
+np.savez('results/test_flip_trace' + stamp + '.npz',
          h_opt=h_opt,
          q_opt=q_opt,
          qd_opt=qd_opt,

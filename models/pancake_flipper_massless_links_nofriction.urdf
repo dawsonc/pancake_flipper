@@ -29,7 +29,7 @@
           <drake:mesh_resolution_hint value="2.5"/>
           <drake:elastic_modulus value="3.5" />
           <drake:hunt_crossley_dissipation value="3.5" />
-          <drake:mu_static value="0.1" />
+          <drake:mu_static value="0.0" />
       </drake:proximity_properties>
     </collision>
   </link>
@@ -62,7 +62,7 @@
           <drake:mesh_resolution_hint value="2.5"/>
           <drake:elastic_modulus value="3.5" />
           <drake:hunt_crossley_dissipation value="3.5" />
-          <drake:mu_static value="0.1" />
+          <drake:mu_static value="0.0" />
       </drake:proximity_properties>
     </collision>
 
