@@ -1,0 +1,95 @@
+<?xml version="1.0"?>
+
+<robot name="pancake_flipper">
+
+  <link name="flipper">
+
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1" />
+      <inertia ixx="1"  ixy="0"  ixz="0" iyy="1" iyz="0" izz="1" />
+    </inertial>
+
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="2 0.2 0.2" />
+      </geometry>
+      <material>
+        <color rgba="0 0 1 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="2 0.2 0.2" />
+      </geometry>
+      <drake:proximity_properties>
+          <drake:mesh_resolution_hint value="2.5"/>
+          <drake:elastic_modulus value="3.5" />
+          <drake:hunt_crossley_dissipation value="3.5" />
+          <drake:mu_static value="0.0" />
+      </drake:proximity_properties>
+    </collision>
+  </link>
+
+  <!--
+    It seems like Drake doesn't support a standard floating base,
+    so we need to emulate the floating base for each body using two
+    prismatic joints and one continuous revolute joint, as mentioned
+    in Issue #3089 on Drake's GitHub.
+
+    To support these various joints, we need dummy massless bodies to
+    serve as intermediates
+   -->
+  <link name="flipper_dummy_1"></link>
+  <link name="flipper_dummy_2"></link>
+
+   <joint name="x_f" type="prismatic">
+    <parent link="world" />
+    <child link="flipper_dummy_1" />
+    <origin xyz="0 0 0" />
+    <axis xyz="1 0 0" />
+  </joint>
+  <joint name="z_f" type="prismatic">
+    <parent link="flipper_dummy_1" />
+    <child link="flipper_dummy_2" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+  <joint name="theta_f" type="continuous">
+    <parent link="flipper_dummy_2" />
+    <child link="flipper" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 1 0" />
+  </joint>
+
+  <transmission type="SimpleTransmission" name="flipper_force_x_trans">
+    <actuator name="flipper_force_x" />
+    <joint name="x_f" />
+  </transmission>
+  <transmission type="SimpleTransmission" name="flipper_force_z_trans">
+    <actuator name="flipper_force_z" />
+    <joint name="z_f" />
+  </transmission>
+  <transmission type="SimpleTransmission" name="flipper_force_theta_trans">
+    <actuator name="flipper_force_theta" />
+    <joint name="theta_f" />
+  </transmission>
+
+  <!-- No force applied to the pancake! -->
+  <!-- <transmission type="SimpleTransmission" name="pancake_force_x_trans">
+    <actuator name="pancake_force_x" />
+    <joint name="x_p" />
+  </transmission>
+  <transmission type="SimpleTransmission" name="pancake_force_z_trans">
+    <actuator name="pancake_force_z" />
+    <joint name="z_p" />
+  </transmission>
+  <transmission type="SimpleTransmission" name="pancake_force_theta_trans">
+    <actuator name="pancake_force_theta" />
+    <joint name="theta_p" />
+  </transmission> -->
+
+</robot>
