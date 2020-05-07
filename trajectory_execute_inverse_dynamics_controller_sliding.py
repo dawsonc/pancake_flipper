@@ -53,7 +53,7 @@ pancake_flipper, scene_graph = build_pancake_flipper_plant(builder)
 # Load the nominal state trajectory
 # datafile = 'results/slide_trace_umax50_ceiling5_T60.npz'
 # datafile = 'results/flip_trace_umax40_ceiling5_mu0.1_T60.npz'
-datafile = 'results/slide_trace_umax40_ceiling5_mu0.0_T60.npz'
+datafile = 'results/test_slide_trace_umax40_ceiling5_mu0.0_T60.npz'
 npzfile = np.load(datafile)
 h_opt = npzfile['h_opt']
 t = np.cumsum(h_opt)
