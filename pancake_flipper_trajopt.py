@@ -516,11 +516,9 @@ prog.AddBoundingBoxConstraint([-np.inf] * (T + 1),
 # We also want to minimize the lowest point, to make sure the trajectories are
 # feasible when run on an arm visualization
 min_z = prog.NewContinuousVariables(1)
-prog.AddConstraint(min_z[0] >= -100)
+prog.AddConstraint(min_z[0] >= -20)
 for t in range(T):
     prog.AddConstraint(min_z[0] <= q[t, 2])
-# Penalize min_z
-prog.AddCost(min_z[0])
 
 # Using the implicit Euler method, constrain the configuration,
 # velocity, and accelerations to be self-consistent.
