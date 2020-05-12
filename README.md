@@ -4,6 +4,15 @@ Pancake flipping via trajectory optimization
 Unlike some breakfast preparation tasks (e.g. pouring orange juice), pancakes cannot be prepared using only traditional prehensile manipulation techniques (put simply, you can't just pick up the half-cooked pancake, turn it over, and put it back down). Instead, a pancake can only be flipped using underactuated (or "non-prehensile") techniques, where we have to flip the pancake by tossing it into the air or sliding it around on the pan. This is a special case of the more general non-prehensile manipulation problem.
 Here, we solve this problem using non-convex optimization with implicit contact mechanics. Those interested in the details can read the full report in `technical_report.pdf`.
 
+It's always important to be up-front about your assumptions and the caveats of your approach. My assumptions are:
+
+- Frictionless contact between the pan and pancake (i.e. I assume you've put enough butter in the pan). I've added some of the constraints for friction, but left them commented out (or set the friction coefficient to 0, which is effectively the same); feel free to try adding them back in if you want!
+- Rigid pancakes. It's very hard to model and simulate a non-rigid pancake, so maybe this is really latke-flipping, or flipping a very dense whole-wheat pancake.
+- Inelastic collisions between the pan and pancake. If you ever see a pancake bounce let me know (and probably don't eat that pancake).
+- The pan is fully actuated, while the pancake is unactuated.
+
+The main caveat of this approach is that it uses non-convex optimization, which is a local method that is not guaranteed to converge, is not complete, and can be highly sensitive to initial conditions, the specific formulation of your constraints, the phase of the moon, and the alignment of the planets.
+
 This project is open-source (under the MIT license). I won't commit to maintaining it in the long-term, but I'm happy to have a conversation about the code (email me at cbd [at] mit [dot] edu or open an issue here).
 
 Installation
