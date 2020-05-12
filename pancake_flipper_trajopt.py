@@ -637,6 +637,7 @@ for t in range(T):
     vars = np.concatenate((q[t], qdot[t], gamma[t],
                            f_ll[t], f_lr[t], f_ur[t], f_ul[t],
                            f_ll_x[t], f_lr_x[t], f_ur_x[t], f_ul_x[t]))
+    # NOTE: this is commented out because we're ignoring friction.
     # prog.AddConstraint(
     #     lambda vars: friction_cone_complementarity(pancake_flipper, vars),
     #     lb=[0] * 12, ub=[0] * 12, vars=vars
