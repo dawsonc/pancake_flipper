@@ -11,6 +11,17 @@ from pydrake.all import (
     Multiplexer, MatrixGain, LogOutput, plot_system_graphviz,
     TrajectorySource, PiecewisePolynomial
 )
+import argparse
+
+
+# Define the command line arguments
+parser = argparse.ArgumentParser(
+    description=('Load and plot a pancake-manipulation trajectory '
+                 'found by pancake_flipper_trajopt.py'))
+parser.add_argument('datafile',
+                    help=('Path to the NPZ file containing the '
+                          'trajectory trace.'))
+args = parser.parse_args()
 
 
 def build_pancake_flipper_plant(builder):
@@ -50,7 +61,8 @@ pancake_flipper, scene_graph = build_pancake_flipper_plant(builder)
 # Load the control trajectory
 # datafile = 'results/slide_trace_umax50_ceiling5_T60.npz'
 # datafile = 'results/flip_trace_umax40_ceiling5_mu0.1_T60.npz'
-datafile = 'results/slide_trace_umax40_ceiling5_mu0.0_T60.npz'
+# datafile = 'results/slide_trace_umax40_ceiling5_mu0.0_T60.npz'
+datafile = args.datafile
 npzfile = np.load(datafile)
 h_opt = npzfile['h_opt']
 t = np.cumsum(h_opt)

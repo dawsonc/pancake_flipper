@@ -1,7 +1,19 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 
-datafile = 'results/slide_trace_umax50_ceiling5_T60.npz'
+
+# Define the command line arguments
+parser = argparse.ArgumentParser(
+    description=('Load and plot a pancake-manipulation trajectory '
+                 'found by pancake_flipper_trajopt.py'))
+parser.add_argument('datafile',
+                    help=('Path to the NPZ file containing the '
+                          'trajectory trace.'))
+args = parser.parse_args()
+
+# datafile = 'results/slide_trace_umax50_ceiling5_T60.npz'
+datafile = args.datafile
 npzfile = np.load(datafile)
 
 # Construct time from time intervals

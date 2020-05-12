@@ -21,6 +21,22 @@ from pydrake.all import (
 
 import time
 import matplotlib.animation as animation
+import argparse
+
+
+# Define the command line arguments
+parser = argparse.ArgumentParser(
+    description=('Solve a trajectory optimization problem '
+                 'for flipping a pancake.'))
+parser.add_argument('--slide',
+                    help='Slide the pancake instead of flipping it.',
+                    action='store_true')
+parser.add_argument('--save_directory',
+                    default='./results',
+                    help=('Path to the directory in which we will '
+                          'save the trajectory animation and trace files.'))
+args = parser.parse_args()
+
 
 # Record the *half* extents of the flipper and pancake geometry
 FLIPPER_H = 0.1
@@ -476,6 +492,10 @@ f_ul = prog.NewContinuousVariables(rows=T, cols=n_forces, name='f_ul')
 # ordered q: 1x6 np.array [x_f, x_p, y_f, y_p, theta_f, theta_p]
 start_state = np.array([0, 0.0, 0, 0.15, 0, 0])
 final_state = np.array([0, 0.0, 0, 0.15, 0, -np.pi])
+if args.slide:
+    start_state = np.array([0, 0.5, 0, 0.15, 0, 0])
+    final_state = np.array([0, 0.0, 0, 0.15, 0, 0])
+
 
 zeros = np.zeros(num_states)
 # Constrain start state
@@ -510,6 +530,8 @@ for t in range(T):
 
 # We don't want to shoot the pancake into the ceiling
 ceiling_z = 5
+if args.slide:
+    ceiling_z = 10
 prog.AddBoundingBoxConstraint([-np.inf] * (T + 1),
                               [ceiling_z] * (T + 1), q[:, 2])
 
@@ -756,9 +778,13 @@ Writer = animation.writers['ffmpeg']
 writer = Writer(fps=15, metadata=dict(artist='Charles Dawson'), bitrate=1800)
 stamp = '_umax' + str(u_abs_max) + '_ceiling' + str(ceiling_z) + \
         '_mu' + str(MU) + '_T' + str(T)
-ani.save('results/arm_viz2_animation' + stamp + '.mp4', writer=writer)
+prefix = 'flip'
+if args.slide:
+    prefix = 'slide'
+ani.save(args.save_directory + '/' + prefix + '_animation' + stamp + '.mp4',
+         writer=writer)
 
-np.savez('results/arm_viz2_trace' + stamp + '.npz',
+np.savez(args.save_directory + '/' + prefix + '_trace' + stamp + '.npz',
          h_opt=h_opt,
          q_opt=q_opt,
          qd_opt=qd_opt,

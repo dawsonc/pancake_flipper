@@ -14,6 +14,19 @@ from pydrake.all import (
     TrajectorySource, PiecewisePolynomial, InverseDynamicsController,
     MultibodyPlant, LogOutput
 )
+import argparse
+
+
+# Define the command line arguments
+parser = argparse.ArgumentParser(
+    description=('Load and execute a pancake-sliding trajectory '
+                 'found by pancake_flipper_trajopt.py. Uses partial feedback '
+                 'linearization to construct a linear state-feedback '
+                 'controller for tracking the desired trajectory.'))
+parser.add_argument('datafile',
+                    help=('Path to the NPZ file containing the '
+                          'trajectory trace.'))
+args = parser.parse_args()
 
 
 def build_pancake_flipper_plant(builder):
@@ -53,7 +66,8 @@ pancake_flipper, scene_graph = build_pancake_flipper_plant(builder)
 # Load the nominal state trajectory
 # datafile = 'results/slide_trace_umax50_ceiling5_T60.npz'
 # datafile = 'results/flip_trace_umax40_ceiling5_mu0.1_T60.npz'
-datafile = 'results/test_slide_trace_umax40_ceiling5_mu0.0_T60.npz'
+# datafile = 'results/test_slide_trace_umax40_ceiling5_mu0.0_T60.npz'
+datafile = args.datafile
 npzfile = np.load(datafile)
 h_opt = npzfile['h_opt']
 t = np.cumsum(h_opt)

@@ -5,8 +5,21 @@ for the flipper only
 Also save a csv containing t, x, z, theta for the pancake only
 '''
 import numpy as np
+import argparse
 
-datafile = 'results/arm_viz2_trace_umax40_ceiling5_mu0.0_T60.npz'
+
+# Define the command line arguments
+parser = argparse.ArgumentParser(
+    description=('Convert an NPZ trajectory trace to CSV for use with the '
+                 'arm_visualizer. Yields one CSV for the flipper and one '
+                 'for the pancake.'))
+parser.add_argument('datafile',
+                    help=('Path to the NPZ file containing the '
+                          'trajectory trace.'))
+args = parser.parse_args()
+
+# datafile = 'results/arm_viz2_trace_umax40_ceiling5_mu0.0_T60.npz'
+datafile = args.datafile
 npzfile = np.load(datafile)
 h_opt = npzfile['h_opt']
 t = np.cumsum(h_opt)
