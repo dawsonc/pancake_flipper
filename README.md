@@ -2,7 +2,7 @@ Pancake flipping via trajectory optimization
 ============================================
 
 Unlike some breakfast preparation tasks (e.g. pouring orange juice), pancakes cannot be prepared using only traditional prehensile manipulation techniques (put simply, you can't just pick up the half-cooked pancake, turn it over, and put it back down). Instead, a pancake can only be flipped using underactuated (or "non-prehensile") techniques, where we have to flip the pancake by tossing it into the air or sliding it around on the pan. This is a special case of the more general non-prehensile manipulation problem.
-Here, we solve this problem using non-convex optimization with implicit contact mechanics. Those interested in the details can read the full report in `technical_report.pdf`.
+Here, we solve this problem using non-convex optimization with implicit contact mechanics. Those interested in the details can watch the [demonstration video](https://www.youtube.com/watch?v=q2j53m65DKU) or read the full report in `technical_report.pdf`.
 
 It's always important to be up-front about your assumptions and the caveats of your approach. My assumptions are:
 
